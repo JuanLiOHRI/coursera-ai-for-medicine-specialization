@@ -2,7 +2,7 @@
 title: "Week 1 Labs 1: Create a Linear Model - using R"
 author: "Juan Li (based on python code on Github)"
 date: "04/26/2022"
-output: rmarkdown::html_vignette
+output: github_document
 vignette: >
 ---
 
