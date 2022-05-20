@@ -1,0 +1,193 @@
+---
+title: "Week 2 lecture notebook - using R"
+author: "Juan Li (based on python code on Github)"
+date: "05/11/2022"
+output:
+  github_document:
+    toc: true
+# output: html_document
+vignette: >
+---
+
+```{r, echo = FALSE}
+knitr::opts_chunk$set(collapse=TRUE, comment="#", out.width='//textwidth')
+```
+
+# Missing values
+
+```{r, message=FALSE}
+df <- data.frame(feature_1 = c(0.1, NA, NA, 0.4),
+                 feature_2 = c(1.1, 2.2, NA, NA))
+df
+```
+
+## Check if each value is missing
+
+```{r, message=FALSE}
+is.na(df)
+```
+
+## Check if any values in a row are true
+
+```{r, message=FALSE}
+df_booleans <- data.frame(col_1 = c(TRUE, TRUE, FALSE),
+                          col_2 = c(TRUE, FALSE, FALSE))
+df_booleans
+```
+
+- $\color{green}{\text{In Python:}}$ If we use `pandas.DataFrame.any()`, it checks if at least one value in a column is  `True`, and if so, returns `True`.
+- If all rows are `False`, then it returns `False` for that column
+- $\color{green}{\text{In R:}}$ we will use `lapply` to run `any()` on each column.
+
+```{r, message=FALSE}
+lapply(df_booleans, any)
+```
+
+- $\color{green}{\text{In Python:}}$ Setting the axis to `1` checks if any item in a row is `True`, and if so, returns true.
+- Similarily only when all values in a row are `False`, the function returns `False`.
+- $\color{green}{\text{In R:}}$ we will use `apply` to run `any()` on each row.
+
+```{r, message=FALSE}
+apply(df_booleans, 1, any)
+```
+
+## Sum booleans
+
+```{r, message=FALSE}
+series_booleans <- c(TRUE, TRUE, FALSE)
+series_booleans
+```
+
+- When applying `sum` to a series (or list) of booleans, the `sum` function treats `True` as `1` and `False` as zero.
+
+```{r, message=FALSE}
+sum(series_booleans)
+```
+
+You will make use of these functions in this week's assignment!
+
+__This is the end of this practice section.__
+
+Please continue on with the lecture videos!
+
+# Decision Tree Classifier
+
+```{r, message=FALSE}
+df <- data.frame(X = c(0, 1, 2, 3),
+                 y = c(0, 0, 1, 1))
+```
+
+```{r, message=FALSE}
+df$X 
+```
+
+```{r, message=FALSE}
+df$y 
+```
+
+```{r, message=FALSE}
+library(rpart)
+dt <- rpart(y ~ X, data=df, method = 'class')
+```
+
+## Set tree parameters
+
+```{r, message=FALSE}
+dt <- rpart(y ~ X, data=df, method = 'class', maxdepth=10, minsplit=2)
+```
+
+## Set parameters using a dictionary
+
+Not applied to R, so skip.
+
+__This is the end of this practice section.__
+
+Please continue on with the lecture videos!
+
+# Apply a mask
+
+Use a 'mask' to filter data of a dataframe
+
+```{r, message=FALSE}
+df <- data.frame(feature_1 = c(0:4))
+df
+```
+
+```{r, message=FALSE}
+mask <- df$feature_1 >= 3
+mask
+```
+
+```{r, message=FALSE}
+df[mask,]
+
+# Or the dplyr version
+require(dplyr)
+df %>% filter(mask)
+```
+
+## Combining comparison operators
+
+You'll want to be careful when combining more than one comparison operator, to avoid errors.
+
+- $\color{green}{\text{In Python:}}$ Using the `and` operator on a series will result in a ValueError
+- $\color{green}{\text{In R:}}$ There is no `and` operator. 
+
+```{r, message=FALSE}
+df$feature_1 >= 2
+```
+
+```{r, message=FALSE}
+df$feature_1 <= 3
+```
+
+```{r, message=FALSE}
+df$feature_1 >= 2 & df$feature_1 <= 3
+```
+
+__This is the end of this practice section.__
+
+Please continue on with the lecture videos!
+
+# Imputation
+
+'mice' is the package that is often used for data imputation in R.
+
+```{r, message=FALSE}
+df <- data.frame(feature_1 = c(0:10),
+                 feature_2 = c(0,NA,20,30,40,50,60,70,80,NA,100))
+df
+```
+
+## Mean imputation
+
+```{r, message=FALSE}
+nparray_imputed_mean <- df
+nparray_imputed_mean$feature_2[is.na(nparray_imputed_mean$feature_2)] <- mean(nparray_imputed_mean$feature_2, na.rm = TRUE)
+nparray_imputed_mean
+```
+
+Notice how the missing values are replaced with 50 in both cases.
+
+## Regression Imputation
+
+```{r, message=FALSE}
+nparray_imputed_reg <- df
+model <- lm(feature_2~feature_1, data = nparray_imputed_reg)
+imp   <- predict(model, newdata=nparray_imputed_reg %>% filter(is.na(feature_2)) %>% select(feature_1))
+nparray_imputed_reg$feature_2[is.na(nparray_imputed_reg$feature_2)] <- imp
+nparray_imputed_reg
+```
+
+Notice how the filled in values are replaced with `10` and `90` when using regression imputation. The imputation assumed a linear relationship between feature 1 and feature 2.
+
+You can also use `impute_lm` from the `simputation` package.
+
+```{r, message=FALSE}
+imp <- simputation::impute_lm(df, feature_2~feature_1)
+imp
+```
+
+__This is the end of this practice section.__
+
+Please continue on with the lecture videos!
