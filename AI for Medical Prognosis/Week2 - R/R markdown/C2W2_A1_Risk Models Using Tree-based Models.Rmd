@@ -56,7 +56,7 @@ library(naniar)
 
 library(treeshap)
 
-source('util.R', echo=TRUE)
+source('../util.R', echo=TRUE)
 ```
 
 # 2. Load the Dataset

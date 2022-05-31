@@ -1,8 +1,8 @@
 load_data <- function(threshold) 
 {
   # Read in the whole dataset
-  X <- read.csv("NHANESI_subset_X.csv", header = T)
-  y <- read.csv("NHANESI_subset_y.csv", header = T)
+  X <- read.csv("../NHANESI_subset_X.csv", header = T)
+  y <- read.csv("../NHANESI_subset_y.csv", header = T)
   
   df <- bind_cols(X, y)
   names(df)[ncol(df)] <- "time"
