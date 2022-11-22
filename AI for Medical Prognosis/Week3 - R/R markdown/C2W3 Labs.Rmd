@@ -1,0 +1,165 @@
+---
+title: "Week 3 lecture notebook - using R"
+author: "Juan Li (based on Coursera materials)"
+date: "06/20/2022"
+output:
+  github_document:
+    toc: true
+# output: html_document
+vignette: >
+---
+
+```{r, echo = FALSE}
+knitr::opts_chunk$set(collapse=TRUE, comment="#", out.width='//textwidth')
+```
+
+# Count Patients
+
+Welcome to the first practice lab of this week!
+
+## Import Packages
+
+```{r, message=FALSE}
+library(dplyr)
+```
+
+We'll work with data where:
+
+- Time: days after a disease is diagnosed and the patient either dies or left the hospital's supervision.
+- Event:
+  - 1 if the patient died
+  - 0 if the patient was not observed to die beyond the given 'Time' (their data is censored)
+
+Notice that these are the same numbers that you see in the lecture video about estimating survival.
+
+```{r, message=FALSE}
+df <- data.frame(Time = c(10,8,60,20,12,30,15),
+                 Event = c(1,0,1,1,0,1,0))
+df
+```
+
+## Count Number of Censored Patients
+
+```{r, message=FALSE}
+df$Event == 0
+```
+
+Patient 1, 4 and 6 were censored.
+
+- Count how many patient records were censored
+
+When we sum a series of booleans, `True` is treated as 1 and `False` is treated as 0.
+
+```{r, message=FALSE}
+sum(df$Event == 0)
+```
+
+## Count Number of Patients Who Definitely Survived Past Time _t_
+
+This assumes that any patient who was censored died at the time of being censored (__died immediately__).
+
+If a patient survived past time `t`:
+
+- Their Time of event should be greater than `t`.
+
+- Notice that they can have an `Event` of either 1 or 0. What matters is their `Time` value.
+
+```{r, message=FALSE}
+t <- 25
+df$Time > t
+```
+
+```{r, message=FALSE}
+sum(df$Time > t)
+```
+
+## Count Number of Patients Who May Have Survived Past Time _t_
+
+This assumes that censored patients __never die__.
+
+- The patient is censored at any time and we assume that they live forever.
+
+- The patient died (`Event` is 1) but after time `t`
+
+```{r, message=FALSE}
+t <- 25
+df$Time > t | df$Event == 0
+```
+
+```{r, message=FALSE}
+sum(df$Time > t | df$Event == 0)
+```
+
+## Count Number of Patients Who were Not Censored Before Time _t_
+If patient was not censored before time `t`:
+
+- They either had an event (death) before `t`, at `t`, or after `t` (any time)
+
+- Or, their `Time` occurs after time `t` (they may have either died or been censored at a later time after `t`)
+
+```{r, message=FALSE}
+t <- 25
+df$Event == 1 | df$Time > t
+```
+
+```{r, message=FALSE}
+sum(df$Event == 1 | df$Time > t)
+```
+
+# Kaplan-Meier
+
+The Kaplan Meier estimate of survival probability is:
+
+$$S(t) = \prod_{t_i <= t}(1-\frac{d_i}{n_i})$$
+
+- $t_i$ are the events observed in the dataset
+
+- $d_i$ is the number of deaths at time $t_i$
+
+- $n_i$ is the number of people who we know have survived up to time $t_i$.
+
+
+## Import Packages
+
+```{r, message=FALSE}
+library(dplyr)
+```
+
+```{r, message=FALSE}
+df <- data.frame(Time = c(3,3,2,2),
+                 Event = c(0,1,0,1))
+df
+```
+
+# Find Those Who Survived Up to Time $t_i$
+
+If they survived up to time $t_i$,
+
+- Their Time is either greater than $t_i$ 
+
+- Or, their Time can be equal to $t_i$
+
+```{r, message=FALSE}
+t_i <- 2
+df$Time >= t_i
+```
+
+You can use this to help you calculate $n_i$ 
+
+## Find Those Who Died at Time $t_i$
+
+- If they died at $t_i$:
+
+- Their Event value is 1.
+- Also, their Time should be equal to $t_i$
+
+```{r, message=FALSE}
+t_i <- 2
+df$Event == 1 & df$Time == t_i
+```
+
+You can use this to help you calculate $d_i$ 
+
+You'll implement Kaplan Meier in this week's assignment!
+
+
