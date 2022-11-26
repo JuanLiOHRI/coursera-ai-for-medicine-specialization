@@ -1,0 +1,604 @@
+---
+title: "Week 4 Cox Proportional Hazards and Random Survival Forests - using R"
+author: "Juan Li (based on Courera matetials)"
+date: "06/21/2022"
+output:
+  github_document:
+    toc: true
+#output: html_document
+vignette: >
+---
+
+```{r, echo = FALSE}
+knitr::opts_chunk$set(collapse=TRUE, comment="#", out.width='//textwidth')
+```
+
+Welcome to the final assignment in Course 2! In this assignment you'll develop risk models using survival data and a combination of linear and non-linear techniques. We'll be using a dataset with survival data of patients with Primary Biliary Cirrhosis (pbc). PBC is a progressive disease of the liver caused by a buildup of bile within the liver (cholestasis) that results in damage to the small bile ducts that drain bile from the liver. Our goal will be to understand the effects of different factors on the survival times of the patients. Along the way you'll learn about the following topics:
+
+- Cox Proportional Hazards
+
+  - Data Preprocessing for Cox Models.
+
+- Random Survival Forests
+
+  - Permutation Methods for Interpretation.
+
+# 1. Import Packages
+
+We'll first import all the packages that we need for this assignment.
+
+- `sklearn` is one of the most popular machine learning libraries.
+- `lifelines` is an open-source library for data analysis. __R: survival, survminer__
+- `numpy` is the fundamental package for scientific computing in python. __R: dplyr__
+- `pandas` is what we'll use to manipulate our data.  __R: dplyr__
+- `matplotlib` is a plotting library.  __R: ggplot2__
+
+```{r, message=FALSE}
+library(survival)
+library(survminer)
+library(dplyr)
+library(ggplot2)
+library(caret)
+library(splitTools)
+
+source('../util.R', echo=TRUE)
+```
+
+# 2. Load the Dataset
+
+Run the next cell to load the lymphoma data set.
+
+```{r, message=FALSE}
+df <- load_data()
+```
+
+# 3. Explore the Dataset
+
+In the lecture videos `time` was in months, however in this assignment, `time` will be converted into years. Also notice that we have assigned a numeric value to `sex`, where `female = 0` and `male = 1`.
+
+Next, familiarize yourself with the data and the shape of it.
+
+```{r, message=FALSE}
+dim(df)
+head(df)
+```
+
+Take a minute to examine particular cases.
+
+```{r, message=FALSE}
+i <- 21
+t(df[i,])
+```
+
+Now, split your dataset into train, validation and test set using 60/20/20 split. 
+
+__R: __ Here we use `splitTools::partition` and make sure there are relatively balanced outcomes `df$status` in the train, validation and test set. Note the partition can't be exactly the same as the python version, below results will be slightly different.
+
+```{r, message=FALSE}
+set.seed(42)
+
+inds <- partition(df$status, p = c(train = 0.6, valid = 0.2, test = 0.2))
+
+df_train <- df[inds$train, ]  # retrieve train data
+df_val   <- df[inds$valid,]   # retrieve the validation data
+df_test  <- df[inds$test, ]   # retrieve test data
+
+print(paste("Total number of patients:", nrow(df)))
+print(paste("Total number of patients in training set::", nrow(df_train)))
+print(paste("Total number of patients in validation set::", nrow(df_val)))
+print(paste("Total number of patients in testing set::", nrow(df_test)))
+```
+
+Before proceeding to modeling, let's normalize the continuous covariates to make sure they're on the same scale. Again, we should normalize the test data using statistics from the train data.
+
+```{r, message=FALSE}
+continuous_columns <- c('age', 'bili', 'chol', 'albumin', 'copper', 'alk.phos', 'ast', 'trig', 'platelet', 'protime')
+
+mean <- colMeans(df_train[,names(df_train) %in% continuous_columns]) 
+std  <- apply(df_train[,names(df_train) %in% continuous_columns], 2, sd)
+
+# standardize the training set
+meanMat  <- matrix(rep(mean,nrow(df_train)),nrow=nrow(df_train), byrow = TRUE)
+df_train[,names(df_train) %in% continuous_columns] <- t(t(df_train[,names(df_train) %in% continuous_columns] - meanMat) / std)
+
+# standardize the validation set
+meanMat  <- matrix(rep(mean,nrow(df_val)),nrow=nrow(df_val), byrow = TRUE)
+df_val[,names(df_val) %in% continuous_columns] <- t(t(df_val[,names(df_val) %in% continuous_columns] - meanMat) / std)
+
+# standardize the testing set
+meanMat  <- matrix(rep(mean,nrow(df_test)),nrow=nrow(df_test), byrow = TRUE)
+df_test[,names(df_test) %in% continuous_columns] <- t(t(df_test[,names(df_test) %in% continuous_columns] - meanMat) / std)
+```
+
+Let's check the summary statistics on our training dataset to make sure it's standardized.
+
+```{r, message=FALSE}
+df_check <- df_train[,names(df_train) %in% continuous_columns] 
+summary(df_check)
+```
+
+# 4. Cox Proportional Hazards
+Our goal is to build a risk score using the survival data that we have. We'll begin by fitting a Cox Proportional Hazards model to your data.
+
+Recall that the Cox Proportional Hazards model describes the hazard for an individual $i$ at time $t$ as
+
+$$\lambda(t,x) = \lambda_0(t)e^{\theta^TX_i}$$
+The $\lambda_0$ term is a baseline hazard and incorporates the risk over time, and the other term incorporates the risk due to the individual's covariates. After fitting the model, we can rank individuals using the person-dependent risk term $e^{\theta^TX_i}$.
+
+Categorical variables cannot be used in a regression model as they are. In order to use them, conversion to a series of variables is required.
+
+Since our data has a mix of categorical (`stage`) and continuous (`wblc`) variables, before we proceed further we need to do some data engineering. To tackle the issue at hand we'll be using the `Dummy Coding` technique. In order to use Cox Proportional Hazards, we will have to turn the categorical data into one hot features so that we can fit our Cox model. Luckily, Pandas has a built-in function called `get_dummies` __R: caret::dummyVars__ that will make it easier for us to implement our function. It turns categorical features into multiple binary features.
+
+## Exercise 1 - to_one_hot
+
+In the cell below, implement the to_one_hot(...) function.
+
+__Hints__
+
+- Remember to drop the first dummy for each each category to avoid convergence issues when fitting the proportional hazards model.
+- Check out the get_dummies() documentation.
+- Use dtype=np.float64.
+
+```{r, message=FALSE}
+# UNQ_C1 (UNIQUE CELL IDENTIFIER, DO NOT EDIT)
+to_one_hot <- function(dataframe, columns)
+{
+  # Convert columns in dataframe to one-hot encoding.
+  #   Args:
+  #       dataframe (dataframe): pandas dataframe containing covariates
+  #       columns (list of strings): list categorical column names to one hot encode
+  #   Returns:
+  #       one_hot_df (dataframe): dataframe with categorical columns encoded
+  #                           as binary variables
+  
+  ### START CODE HERE (REPLACE INSTANCES OF 'None' with your code) ###
+  dataframe[,names(dataframe) %in% columns] <- lapply(dataframe[,names(dataframe) %in% columns], factor)
+  formula <- "~"
+  for (i in 1:(length(columns)-1)) formula <- paste(formula, columns[i], "+")
+  formula <- paste(formula, columns[length(columns)])
+  dmy <- dummyVars(formula, data=dataframe, fullRank=T)
+  one_hot_df <- data.frame(predict(dmy, newdata = dataframe))
+  one_hot_df <- bind_cols(dataframe[,!(names(dataframe) %in% columns)],one_hot_df)
+
+  ### END CODE HERE ###
+  return (one_hot_df)
+}
+```
+
+```{r, message=FALSE}
+# test cell ex1 - do not modify this test cell
+to_encode <- c('spiders', 'stage')
+
+one_hot_train <- to_one_hot(df_train, to_encode)
+one_hot_val <- to_one_hot(df_val, to_encode)
+one_hot_test <- to_one_hot(df_test, to_encode)
+
+names(one_hot_val)
+print(paste("There are", ncol(one_hot_val), "columns"))
+```
+
+__Expected Output:__
+
+One hot val columns:
+
+ ['time', 'status', 'trt', 'age', 'sex', 'ascites', 'hepato', 'edema', 'bili', 'chol', 'albumin', 'copper', 'alk.phos', 'ast', 'trig', 'platelet', 'protime', 'spiders_1.0', 'stage_2.0', 'stage_3.0', 'stage_4.0'] 
+
+There are 21 columns
+
+ All tests passed.
+
+Now you'll use the function you coded to transform the training, validation, and test sets.
+
+```{r, message=FALSE}
+to_encode <- c('edema', 'stage')
+
+one_hot_train <- to_one_hot(df_train, to_encode)
+one_hot_val <- to_one_hot(df_val, to_encode)
+one_hot_test <- to_one_hot(df_test, to_encode)
+```
+
+## Look for new features
+
+Now, let's take a peek at one of the transformed data sets. Do you notice any new features?
+
+```{r, message=FALSE}
+dim(one_hot_train)
+head(one_hot_train)
+```
+
+# 5. Fitting and Interpreting a Cox Model
+
+Run the following cell to fit your Cox Proportional Hazards model using the `lifelines` package __R: survival, survminer__.
+
+```{r, message=FALSE}
+cph <- coxph(Surv(time, status) ~ ., data = one_hot_train) 
+```
+
+You can use cph.print_summary() to view the coefficients associated with each covariate as well as confidence intervals.
+
+```{r, message=FALSE}
+summary(cph)
+```
+
+__Question:__
+
+- According to the model, was treatment `trt` beneficial?
+
+- What was its associated hazard ratio?
+  - Note that the hazard ratio is how much an incremental increase in the feature variable changes the hazard.
+  
+__Check your answer!__
+
+- You should see that the treatment (`trt`) was beneficial because it has a negative impact on the hazard (the coefficient is negative, and exp(coef) is less than 1).
+
+- The associated hazard ratio is ~0.66, because this is the exp(coef) of treatment.
+
+We can compare the predicted survival curves for treatment variables. Run the next cell to plot survival curves using the `plot_covariate_groups()` function.
+
+- The y-axis is th survival rate
+
+- The x-axis is time
+
+```{r, message=FALSE}
+trt_df <- bind_rows(data.frame(t(colMeans(one_hot_train))),data.frame(t(colMeans(one_hot_train))))
+trt_df$trt <- c(0,1)
+
+fit  <- survfit(cph, newdata = trt_df)
+ggsurvplot(fit, data = one_hot_train, 
+           conf.int = FALSE, legend.labs=c("trt=0", "trt=1"))
+```
+
+Notice how the group without treatment has a lower survival rate at all times (the x-axis is time) compared to the treatment group.
+
+# 6. Hazard Ratio
+Recall from the lecture videos that the Hazard Ratio between two patients was the likelihood of one patient (e.g smoker) being more at risk than the other (e.g non-smoker).
+
+$$\frac{\lambda_{smoker}(t)}{\lambda_{nonsmoker}(t)} = e^{\theta (X_{smoker}-X_{nonsmoker})^T}$$
+Where
+
+$$\lambda_{smoker}(t) = \lambda_0(t)e^{\theta X_{smoker}^T}$$
+and
+
+$$\lambda_{nonsmoker}(t) = \lambda_0(t)e^{\theta X_{nonsmoker}^T}$$
+
+## Exercise 2 - hazard_ratio
+
+In the cell below, write a function to compute the hazard ratio between two individuals given the cox model's coefficients.
+
+```{r, message=FALSE}
+# UNQ_C2 (UNIQUE CELL IDENTIFIER, DO NOT EDIT)
+hazard_ratio <- function(case_1, case_2, cox_params)
+{
+  # Return the hazard ratio of case_1 : case_2 using
+  #   the coefficients of the cox model.
+  #   
+  #   Args:
+  #       case_1 (np.array): (1 x d) array of covariates
+  #       case_2 (np.array): (1 x d) array of covariates
+  #       model (np.array): (1 x d) array of cox model coefficients
+  #   Returns:
+  #       hazard_ratio (float): hazard ratio of case_1 : case_2
+  
+  ### START CODE HERE (REPLACE INSTANCES OF 'None' with your code) ###
+    
+  hr <- exp(cox_params %*% t(case_1)) / exp(cox_params %*% t(case_2))
+  
+  ### END CODE HERE ###
+  
+  return (hr)
+}
+```
+
+Now, evaluate it on the following pair of indivduals: `i = 1` and `j = 5`. Given your implementation of `hazard_ratio` is correct, you will only pass the test when `i = 1` and `j = 5`.
+
+```{r, message=FALSE}
+i <- 2
+j <- 6
+
+hazard_ratio(one_hot_train[i,-c(1,2)], one_hot_train[j,-c(1,2)], cph$coefficients)
+```
+
+
+__Question:__
+
+Is case_1 or case_2 at greater risk?
+
+__Check your answer!__
+Important! The following answer only applies if you picked i = 1 and j = 5. __R code: the data split is not identical to the python version, here we are not comparing the same pair__
+You should see that `case_1` is at lower risk.
+The hazard ratio of case 1 / case 2 is smaller than 1, so case 1 had a lower hazard relative to case 2
+
+```{r, message=FALSE}
+i <- 8
+case_1 <- one_hot_train[i,-c(1,2)]
+j <- 5
+case_2 <- one_hot_train[j,-c(1,2)]
+
+print("Case 1")
+case_1
+print("Case 2")
+case_2
+print(paste("Hazard Ratio:", hazard_ratio(case_1, case_2, cph$coefficients)))
+```
+
+# 7. Harrell's C-index
+
+To evaluate how good our model is performing, we will write our own version of the C-index. Similar to the week 1 case, C-index in the survival context is the probability that, given a randomly selected pair of individuals, the one who died sooner has a higher risk score.
+
+However, we need to take into account censoring. Imagine a pair of patients, $A$ and $B$.
+
+__Scenario 1__
+
+- $A$ was censored at time $t_A$
+
+- $B$ died at $t_B$
+
+- $t_A < t_B$
+
+Because of censoring, we can't say whether $A$ or $B$ should have a higher risk score.
+
+__Scenario 2__
+
+Now imagine that $t_A > t_B$
+
+- $A$ was censored at time $t_A$
+
+- $B$ died at $t_B$
+
+- $t_A > t_B$
+
+Now we can definitively say that $B$ should have a higher risk score than $A$, since we know for a fact that $A$ lived longer.
+
+Therefore, when we compute our C-index
+
+- We should only consider pairs where at most one person is censored
+
+- If they are censored, then their censored time should occur after the other person's time of death.
+
+The metric we get if we use this rule is called __Harrel's C-index__.
+
+Note that in this case, being censored at time $t$ means that the true death time was some time AFTER time $t$ and not at $t$ .
+
+- Therefore if $t_A = t_B$ and $A$ was censored:
+
+  - Then $A$ actually lived longer than $B$.
+
+  - This will effect how you deal with ties in the exercise below!
+
+## Exercise 3 - harrell_c
+
+Fill in the function below to compute Harrel's C-index.
+
+__Hints__
+
+- If you get a division by zero error, consider checking how you count when a pair is permissible (in the case where one patient is censored and the other is not censored).
+
+```{r, message=FALSE}
+# UNQ_C3 (UNIQUE CELL IDENTIFIER, DO NOT EDIT)
+harrell_c <- function(y_true, scores, event)
+{
+  # Compute Harrel C-index given true event/censoring times,
+  #   model output, and event indicators.
+  #   
+  #   Args:
+  #       y_true (array): array of true event times
+  #       scores (array): model risk scores
+  #       event (array): indicator, 1 if event occurred at that index, 0 for censorship
+  #   Returns:
+  #       result (float): C-index metric
+  
+  n <- length(y_true)
+  
+  concordant = 0.0
+  permissible = 0.0
+  ties = 0.0
+    
+  result = 0.0
+  
+  ### START CODE HERE (REPLACE INSTANCES OF 'None' and 'pass' with your code) ###
+  
+  # use double for loop to go through cases
+  for (i in 1:(n-1))
+  {
+    # set lower bound on j to avoid double counting
+    for (j in (i+1):n)
+    {
+      # check if at most one is censored
+      if (event[i] == 1 | event[j] == 1)
+      {
+        # check if neither are censored
+        if (event[i] == 1 & event[j] == 1)
+        {
+          permissible = permissible + 1.0
+          
+          # check if scores are tied
+          if (scores[i] == scores[j])
+          {
+            ties = ties + 1.0
+          } else if (y_true[i] < y_true[j] & scores[i] > scores[j])# check for concordant
+          {
+            concordant = concordant + 1.0
+          } else if (y_true[i] > y_true[j] & scores[i] < scores[j])
+          {
+            concordant = concordant + 1.0
+          }
+        } else if (event[i] != event[j]) # check if one is censored
+        {
+          # get censored index
+          censored = j
+          uncensored = i
+          
+          if (event[i] == 0)
+          {
+            censored = i
+            uncensored = j
+          }
+          
+          # check if permissible
+          # Note: in this case, we are assuming that censored at a time
+          # means that you did NOT die at that time. That is, if you
+          # live until time 30 and have event = 0, then you lived THROUGH
+          # time 30.
+          if (y_true[uncensored] <= y_true[censored])
+          {
+            permissible = permissible + 1.0
+            
+            # check if scores are tied
+            if (scores[uncensored] == scores[censored])
+            {
+              # update ties 
+              ties = ties + 1.0
+            }
+            
+            # check if scores are concordant 
+            if (scores[uncensored] > scores[censored])
+            {
+              concordant = concordant + 1.0
+            }
+          }
+        }
+      } 
+    }
+  }
+  
+  # set result to c-index computed from number of concordant pairs,
+  # number of ties, and number of permissible pairs (REPLACE 0 with your code)  
+  result = (concordant + 0.5*ties) / permissible
+  
+  ### END CODE HERE ###
+    
+  return (result)  
+}
+```
+
+
+You can test your function on the following test cases:
+
+```{r, message=FALSE}
+y_true <- c(30, 12, 84, 9)
+
+# Case 1
+event = c(1, 1, 1, 1)
+scores = c(0.5, 0.9, 0.1, 1.0)
+print("Case 1")
+print(paste("Expected: 1.0, Output:", harrell_c(y_true, scores, event)))
+
+# Case 2
+scores = c(0.9, 0.5, 1.0, 0.1)
+print("Case 2")
+print(paste("Expected: 0.0, Output:", harrell_c(y_true, scores, event)))
+
+# Case 3
+event = c(1, 0, 1, 1)
+scores = c(0.5, 0.9, 0.1, 1.0)
+print("Case 3")
+print(paste("Expected: 1.0, Output:", harrell_c(y_true, scores, event)))
+
+# Case 4
+y_true = c(30, 30, 20, 20)
+event = c(1, 0, 1, 0)
+scores = c(10, 5, 15, 20)
+print("Case 4")
+print(paste("Expected: 0.75, Output:", harrell_c(y_true, scores, event)))
+
+# Case 5
+y_true = c(20, 20, 30, 30, 30)
+event = c(0, 1, 0, 1, 0)
+scores = c(20, 15, 5, 10, 15)
+print("Case 5")
+print(paste("Expected: 0.583, Output:", harrell_c(y_true, scores, event)))
+
+# Case 6
+y_true = c(10,10)
+event = c(0,1)
+scores = c(4,5)
+print("Case 6")
+print(paste("Expected: 1.0 , Output:", harrell_c(y_true, scores, event)))
+```
+
+Now use the Harrell's C-index function to evaluate the cox model on our data sets.
+
+```{r}
+# Train
+scores <- predict(cph, one_hot_train)
+cox_train_scores <- harrell_c(one_hot_train$time , scores, one_hot_train$status)
+
+# Validation
+scores <- predict(cph, one_hot_val)
+cox_val_scores <- harrell_c(one_hot_val$time , scores, one_hot_val$status)
+
+# Test
+scores <- predict(cph, one_hot_test)
+cox_test_scores <- harrell_c(one_hot_test$time , scores, one_hot_test$status)
+
+print(paste("Train:", cox_train_scores))
+print(paste("Validation:", cox_val_scores))
+print(paste("Test:", cox_test_scores))
+```
+
+What do these values tell us ?
+
+# Random Survival Forests
+
+This performed well, but you have a hunch you can squeeze out better performance by using a machine learning approach. You decide to use a Random Survival Forest. To do this, you can use the `randomForestSRC` package in R. To call R function from Python, we'll use the r2py package. Run the following cell to import the necessary requirements.
+
+For more details about `randomForestSRC`, see [here](https://www.randomforestsrc.org/articles/getstarted.html)
+
+```{r}
+library(randomForestSRC)
+```
+
+Instead of encoding our categories as binary features, we can use the original dataframe since trees deal well with raw categorical data (can you think why this might be?).
+
+Run the code cell below to build your forest.
+
+```{r}
+model <- rfsrc(Surv(time, status) ~ ., data=df_train, ntree=300, nodedepth=5, seed=-1)
+print(model)
+```
+
+Finally, let's evaluate on our validation and test sets, and compare it with our Cox model.
+
+```{r}
+result <- predict(model, newdata=df_val)
+scores <- result$predicted
+
+print(paste("Cox Model Validation Score:", cox_val_scores))
+print(paste("Survival Forest Validation Score:", harrell_c(df_val$time, scores, df_val$status)))
+```
+
+
+```{r}
+result <- predict(model, newdata=df_test)
+scores <- result$predicted
+
+print(paste("Cox Model Test Score:", cox_test_scores))
+print(paste("Survival Forest Test Score:", harrell_c(df_test$time, scores, df_test$status)))
+```
+
+Your random forest model should be outperforming the Cox model slightly. Let's dig deeper to see how they differ.
+
+
+# Permutation Method for Interpretation
+
+We'll dig a bit deeper into interpretation methods for forests a bit later, but for now just know that random surival forests come with their own built in variable importance feature. The method is referred to as VIMP, and for the purpose of this section you should just know that higher absolute value of the VIMP means that the variable generally has a larger effect on the model outcome.
+
+Run the next cell to compute and plot VIMP for the random survival forest.
+
+```{r}
+vimps <- vimp(model)$importance
+
+ggplot(data.frame(names = names(vimps), vimps = vimps), aes(names, vimps))+
+  geom_col()+
+  coord_flip()+
+  labs(title="VIMP (absolute value)")
+```
+
+## Question:
+
+How does the variable importance compare to that of the Cox model? Which variable is important in both models? Which variable is important in the random survival forest but not in the Cox model? You should see that `edema` is important in both the random survival forest and the Cox model. You should also see that `bili` is important in the random survival forest but not the Cox model .
+
+# Congratulations!
+
+You've finished the last assignment in course 2! Take a minute to look back at the analysis you've done over the last four assignments. You've done a great job!
+
